@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset
 import multiprocessing as mp
-from util import normalize_coords, gen_grid_np
+from ..util import normalize_coords, gen_grid_np
 
 
 def get_sample_weights(flow_stats):
@@ -24,22 +24,32 @@ def get_sample_weights(flow_stats):
 class RAFTExhaustiveDataset(Dataset):
     def __init__(self, args, max_interval=None):
         self.args = args
-        self.seq_dir = args.data_dir
-        self.seq_name = os.path.basename(self.seq_dir.rstrip('/'))
-        self.img_dir = os.path.join(self.seq_dir, 'color')
-        self.flow_dir = os.path.join(self.seq_dir, 'raft_exhaustive')
-        img_names = sorted(os.listdir(self.img_dir))
-        self.num_imgs = min(self.args.num_imgs, len(img_names))
-        self.img_names = img_names[:self.num_imgs]
+        if hasattr(args, 'images') and args.images is not None:
+            self.images = args.images
+            self.num_imgs = len(self.images)
+            self.h, self.w = self.images.shape[1:3]
+            self.img_names = [f'{i:05d}.jpg' for i in range(self.num_imgs)]
+            self.flows = args.flows if hasattr(args, 'flows') else None
+            self.raft_masks = args.raft_masks if hasattr(args, 'raft_masks') else None
+            self.sample_weights = args.sample_weights if hasattr(args, 'sample_weights') else None
+        else:
+            self.seq_dir = args.data_dir
+            self.seq_name = os.path.basename(self.seq_dir.rstrip('/'))
+            self.img_dir = os.path.join(self.seq_dir, 'color')
+            self.flow_dir = os.path.join(self.seq_dir, 'raft_exhaustive')
+            img_names = sorted(os.listdir(self.img_dir))
+            self.num_imgs = min(self.args.num_imgs, len(img_names))
+            self.img_names = img_names[:self.num_imgs]
+            h, w, _ = imageio.imread(os.path.join(self.img_dir, img_names[0])).shape
+            self.h, self.w = h, w
+            flow_stats = json.load(open(os.path.join(self.seq_dir, 'flow_stats.json')))
+            self.sample_weights = get_sample_weights(flow_stats)
+            self.images = None
 
-        h, w, _ = imageio.imread(os.path.join(self.img_dir, img_names[0])).shape
-        self.h, self.w = h, w
         max_interval = self.num_imgs - 1 if not max_interval else max_interval
         self.max_interval = mp.Value('i', max_interval)
         self.num_pts = self.args.num_pts
         self.grid = gen_grid_np(self.h, self.w)
-        flow_stats = json.load(open(os.path.join(self.seq_dir, 'flow_stats.json')))
-        self.sample_weights = get_sample_weights(flow_stats)
 
     def __len__(self):
         return self.num_imgs * 100000
@@ -52,40 +62,61 @@ class RAFTExhaustiveDataset(Dataset):
         self.max_interval.value = min(curr_max_interval + increment, self.num_imgs - 1)
 
     def __getitem__(self, idx):
-        cached_flow_pred_dir = os.path.join('out', '{}_{}'.format(self.args.expname, self.seq_name), 'flow')
-        cached_flow_pred_files = sorted(glob.glob(os.path.join(cached_flow_pred_dir, '*')))
-        flow_error_file = os.path.join(os.path.dirname(cached_flow_pred_dir), 'flow_error.txt')
-        if os.path.exists(flow_error_file):
-            flow_error = np.loadtxt(flow_error_file)
-            id1_sample_weights = flow_error / np.sum(flow_error)
-            id1 = np.random.choice(self.num_imgs, p=id1_sample_weights)
-        else:
+        cached_flow_pred_files = []
+        if self.images is not None:
             id1 = idx % self.num_imgs
+            img_name1 = self.img_names[id1]
+            max_interval = min(self.max_interval.value, self.num_imgs - 1)
+            img2_candidates = sorted(list(self.sample_weights[img_name1].keys()))
+            img2_candidates = img2_candidates[max(id1 - max_interval, 0):min(id1 + max_interval, self.num_imgs - 1)]
+            id2s = np.array([self.img_names.index(n) for n in img2_candidates])
+            sample_weights = np.array([self.sample_weights[img_name1][i] for i in img2_candidates]).astype(float)
+            sample_weights /= np.sum(sample_weights)
+            sample_weights[np.abs(id2s - id1) <= 1] = 0.5
+            sample_weights /= np.sum(sample_weights)
+            img_name2 = np.random.choice(img2_candidates, p=sample_weights)
+            id2 = self.img_names.index(img_name2)
+            frame_interval = abs(id1 - id2)
 
-        img_name1 = self.img_names[id1]
-        max_interval = min(self.max_interval.value, self.num_imgs - 1)
-        img2_candidates = sorted(list(self.sample_weights[img_name1].keys()))
-        img2_candidates = img2_candidates[max(id1 - max_interval, 0):min(id1 + max_interval, self.num_imgs - 1)]
+            img1 = self.images[id1].cpu().numpy()
+            img2 = self.images[id2].cpu().numpy()
+            flow = self.flows[f'{img_name1}_{img_name2}']
+            masks = self.raft_masks[f'{img_name1}_{img_name2}']
+        else:
+            cached_flow_pred_dir = os.path.join('out', '{}_{}'.format(self.args.expname, self.seq_name), 'flow')
+            cached_flow_pred_files = sorted(glob.glob(os.path.join(cached_flow_pred_dir, '*')))
+            flow_error_file = os.path.join(os.path.dirname(cached_flow_pred_dir), 'flow_error.txt')
+            if os.path.exists(flow_error_file):
+                flow_error = np.loadtxt(flow_error_file)
+                id1_sample_weights = flow_error / np.sum(flow_error)
+                id1 = np.random.choice(self.num_imgs, p=id1_sample_weights)
+            else:
+                id1 = idx % self.num_imgs
 
-        # sample more often from i-1 and i+1
-        id2s = np.array([self.img_names.index(n) for n in img2_candidates])
-        sample_weights = np.array([self.sample_weights[img_name1][i] for i in img2_candidates])
-        sample_weights /= np.sum(sample_weights)
-        sample_weights[np.abs(id2s - id1) <= 1] = 0.5
-        sample_weights /= np.sum(sample_weights)
+            img_name1 = self.img_names[id1]
+            max_interval = min(self.max_interval.value, self.num_imgs - 1)
+            img2_candidates = sorted(list(self.sample_weights[img_name1].keys()))
+            img2_candidates = img2_candidates[max(id1 - max_interval, 0):min(id1 + max_interval, self.num_imgs - 1)]
 
-        img_name2 = np.random.choice(img2_candidates, p=sample_weights)
-        id2 = self.img_names.index(img_name2)
-        frame_interval = abs(id1 - id2)
+            # sample more often from i-1 and i+1
+            id2s = np.array([self.img_names.index(n) for n in img2_candidates])
+            sample_weights = np.array([self.sample_weights[img_name1][i] for i in img2_candidates]).astype(float)
+            sample_weights /= np.sum(sample_weights)
+            sample_weights[np.abs(id2s - id1) <= 1] = 0.5
+            sample_weights /= np.sum(sample_weights)
 
-        # read image, flow and confidence
-        img1 = imageio.imread(os.path.join(self.img_dir, img_name1)) / 255.
-        img2 = imageio.imread(os.path.join(self.img_dir, img_name2)) / 255.
+            img_name2 = np.random.choice(img2_candidates, p=sample_weights)
+            id2 = self.img_names.index(img_name2)
+            frame_interval = abs(id1 - id2)
 
-        flow_file = os.path.join(self.flow_dir, '{}_{}.npy'.format(img_name1, img_name2))
-        flow = np.load(flow_file)
-        mask_file = flow_file.replace('raft_exhaustive', 'raft_masks').replace('.npy', '.png')
-        masks = imageio.imread(mask_file) / 255.
+            # read image, flow and confidence
+            img1 = imageio.imread(os.path.join(self.img_dir, img_name1)) / 255.
+            img2 = imageio.imread(os.path.join(self.img_dir, img_name2)) / 255.
+
+            flow_file = os.path.join(self.flow_dir, '{}_{}.npy'.format(img_name1, img_name2))
+            flow = np.load(flow_file)
+            mask_file = flow_file.replace('raft_exhaustive', 'raft_masks').replace('.npy', '.png')
+            masks = imageio.imread(mask_file) / 255.
 
         coord1 = self.grid
         coord2 = self.grid + flow

@@ -10,10 +10,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import util
-from criterion import masked_mse_loss, masked_l1_loss, compute_depth_range_loss, lossfun_distortion
-from networks.mfn import GaborNet
-from networks.nvp_simplified import NVPSimplified
+from . import util
+from .criterion import masked_mse_loss, masked_l1_loss, compute_depth_range_loss, lossfun_distortion
+from .networks.mfn import GaborNet
+from .networks.nvp_simplified import NVPSimplified
 from kornia import morphology as morph
 
 
@@ -99,29 +99,41 @@ class BaseTrainer():
             )
 
     def read_data(self):
-        self.seq_dir = self.args.data_dir
-        self.seq_name = os.path.basename(self.seq_dir.rstrip('/'))
-        self.img_dir = os.path.join(self.seq_dir, 'color')
-
-        img_files = sorted(glob.glob(os.path.join(self.img_dir, '*')))
-        self.num_imgs = min(self.args.num_imgs, len(img_files))
-        self.img_files = img_files[:self.num_imgs]
-
-        images = np.array([imageio.imread(img_file) / 255. for img_file in self.img_files])
-        self.images = torch.from_numpy(images).float()  # [n_imgs, h, w, 3]
-        self.h, self.w = self.images.shape[1:3]
-
-        mask_files = [img_file.replace('color', 'mask').replace('.jpg', '.png') for img_file in self.img_files]
-        if os.path.exists(mask_files[0]):
-            masks = np.array([imageio.imread(mask_file)[..., :3].sum(axis=-1) / 255.
-                              if imageio.imread(mask_file).ndim == 3 else
-                              imageio.imread(mask_file) / 255.
-                              for mask_file in mask_files])
-            self.masks = torch.from_numpy(masks).to(self.device) > 0.  # [n_imgs, h, w]
-            self.with_mask = True
+        if hasattr(self.args, 'images') and self.args.images is not None:
+            self.images = self.args.images.to(self.device)  # [n_imgs, h, w, 3]
+            self.num_imgs = len(self.images)
+            self.h, self.w = self.images.shape[1:3]
+            self.img_files = [f'{i:05d}.jpg' for i in range(self.num_imgs)]
+            if hasattr(self.args, 'masks') and self.args.masks is not None:
+                self.masks = self.args.masks.to(self.device) > 0.
+                self.with_mask = True
+            else:
+                self.masks = torch.ones(self.images.shape[:-1]).to(self.device) > 0.
+                self.with_mask = False
         else:
-            self.masks = torch.ones(self.images.shape[:-1]).to(self.device) > 0.
-            self.with_mask = False
+            self.seq_dir = self.args.data_dir
+            self.seq_name = os.path.basename(self.seq_dir.rstrip('/'))
+            self.img_dir = os.path.join(self.seq_dir, 'color')
+
+            img_files = sorted(glob.glob(os.path.join(self.img_dir, '*')))
+            self.num_imgs = min(self.args.num_imgs, len(img_files))
+            self.img_files = img_files[:self.num_imgs]
+
+            images = np.array([imageio.imread(img_file) / 255. for img_file in self.img_files])
+            self.images = torch.from_numpy(images).float()  # [n_imgs, h, w, 3]
+            self.h, self.w = self.images.shape[1:3]
+
+            mask_files = [img_file.replace('color', 'mask').replace('.jpg', '.png') for img_file in self.img_files]
+            if os.path.exists(mask_files[0]):
+                masks = np.array([imageio.imread(mask_file)[..., :3].sum(axis=-1) / 255.
+                                if imageio.imread(mask_file).ndim == 3 else
+                                imageio.imread(mask_file) / 255.
+                                for mask_file in mask_files])
+                self.masks = torch.from_numpy(masks).to(self.device) > 0.  # [n_imgs, h, w]
+                self.with_mask = True
+            else:
+                self.masks = torch.ones(self.images.shape[:-1]).to(self.device) > 0.
+                self.with_mask = False
         self.grid = util.gen_grid(self.h, self.w, device=self.device, normalize=False, homogeneous=True).float()
 
     def project(self, x, return_depth=False):

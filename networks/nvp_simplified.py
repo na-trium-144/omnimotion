@@ -3,7 +3,7 @@ import torch
 from torch import masked_select, nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
-import networks.pe_relu
+from . import pe_relu
 
 
 class CouplingLayer(nn.Module):
