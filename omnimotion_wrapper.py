@@ -43,9 +43,9 @@ class OmniMotionOptimizer:
         self.expname = expname
         
         # [N, 3, H, W] -> [N, H, W, 3] in [0, 1]
-        mean_t = torch.tensor(mean).view(1, 3, 1, 1).to(device)
-        std_t = torch.tensor(std).view(1, 3, 1, 1).to(device)
-        images_01 = (video_tensor.to(device) * std_t + mean_t).clamp(0, 1)
+        mean_t = torch.tensor(mean).view(1, 3, 1, 1)
+        std_t = torch.tensor(std).view(1, 3, 1, 1)
+        images_01 = (video_tensor.cpu() * std_t + mean_t).clamp(0, 1)
         self.images = images_01.permute(0, 2, 3, 1) # [N, H, W, 3]
         self.num_imgs, self.h, self.w, _ = self.images.shape
         

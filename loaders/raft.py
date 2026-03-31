@@ -78,8 +78,8 @@ class RAFTExhaustiveDataset(Dataset):
             id2 = self.img_names.index(img_name2)
             frame_interval = abs(id1 - id2)
 
-            img1 = self.images[id1].cpu().numpy()
-            img2 = self.images[id2].cpu().numpy()
+            img1 = self.images[id1].numpy()
+            img2 = self.images[id2].numpy()
             flow = self.flows[f'{img_name1}_{img_name2}']
             masks = self.raft_masks[f'{img_name1}_{img_name2}']
         else:
