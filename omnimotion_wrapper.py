@@ -325,7 +325,7 @@ class OmniMotionOptimizer:
         data_loader = torch.utils.data.DataLoader(dataset, batch_size=self.args.num_pairs, num_workers=0)
         if self.trainer is None: self.trainer = BaseTrainer(self.args, device=self.device)
         start_step = self.trainer.step + 1
-        for step in range(start_step, start_step + num_iters):
+        for step in tqdm(range(start_step, start_step + num_iters)):
             batch = next(iter(data_loader))
             self.trainer.train_one_step(step, batch)
             if step % self.args.i_print == 0:
