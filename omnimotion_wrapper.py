@@ -8,6 +8,7 @@ import json
 from typing import List, Union, Dict
 from tqdm.auto import tqdm
 from os.path import join, dirname
+from torch.utils.tensorboard import SummaryWriter
 
 from .trainer import BaseTrainer
 from .loaders.create_training_dataset import get_training_dataset
@@ -317,8 +318,9 @@ class OmniMotionOptimizer:
         process_chain(list(range(self.num_imgs)))
         process_chain(list(range(self.num_imgs-1, -1, -1)))
 
-    def run_optimization(self, num_iters: int = 1000):
+    def run_optimization(self, num_iters: int = 1000, output_dir = "."):
         self.args.num_iters = num_iters
+        writer = SummaryWriter(output_dir)
         dataset, data_sampler = get_training_dataset(self.args, max_interval=self.args.start_interval)
         data_loader = torch.utils.data.DataLoader(dataset, batch_size=self.args.num_pairs, num_workers=0)
         if self.trainer is None: self.trainer = BaseTrainer(self.args, device=self.device)
@@ -328,7 +330,10 @@ class OmniMotionOptimizer:
             self.trainer.train_one_step(step, batch)
             if step % self.args.i_print == 0:
                 print(f"Step {step}: loss = {self.trainer.scalars_to_log.get('loss/Loss', 'N/A')}")
+            self.trainer.log(writer, step)
             dataset.set_max_interval(self.args.start_interval + step // 2000)
+        writer.flush()
+        writer.close()
 
     def query_trajectory(self, query_frame_id: int, points: Union[torch.Tensor, np.ndarray]):
         if self.trainer is None: self.trainer = BaseTrainer(self.args, device=self.device)

@@ -100,6 +100,7 @@ class BaseTrainer():
 
     def read_data(self):
         if hasattr(self.args, 'images') and self.args.images is not None:
+            self.seq_name = "" # TODO
             self.images = self.args.images.to(self.device)  # [n_imgs, h, w, 3]
             self.num_imgs = len(self.images)
             self.h, self.w = self.images.shape[1:3]
