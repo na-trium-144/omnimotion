@@ -330,6 +330,7 @@ class OmniMotionOptimizer:
             self.trainer.train_one_step(step, batch)
             if step % self.args.i_print == 0:
                 print(f"Step {step}: loss = {self.trainer.scalars_to_log.get('loss/Loss', 'N/A')}")
+                self.save_checkpoint(f"{output_dir}/{step}.pt")
             self.trainer.log(writer, step)
             dataset.set_max_interval(self.args.start_interval + step // 2000)
         writer.flush()
