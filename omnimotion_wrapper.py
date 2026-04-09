@@ -34,6 +34,7 @@ class OmniMotionOptimizer:
     def __init__(
         self, 
         video_tensor: torch.Tensor, 
+        depths_tensor: torch.Tensor, 
         mean: List[float] = [0.485, 0.456, 0.406], 
         std: List[float] = [0.229, 0.224, 0.225],
         device: str = 'cuda',
@@ -49,6 +50,11 @@ class OmniMotionOptimizer:
         self.images = images_01.permute(0, 2, 3, 1) # [N, H, W, 3]
         self.images_gpu = self.images.to(device)
         self.num_imgs, self.h, self.w, _ = self.images.shape
+
+        self.depths = depths_tensor.clone().cpu().permute(0, 2, 3, 1) # [N, H, W, 1]
+        self.depths /= torch.max(self.depths) * 2 - 1
+        self.depths_gpu = self.depths.to(device)
+        assert self.depths.shape[0] == self.num_imgs and self.depths.shape[1:3] == self.images.shape[1:3], f"Depth tensor shape must match video tensor shape, but got {self.depths.shape} and {self.images.shape}"
         
         self.flows = {}
         self.raft_masks = {}
@@ -90,6 +96,7 @@ class OmniMotionOptimizer:
         args.i_print, args.i_img, args.i_weight, args.i_cache = 100, 500, 20000, 20000
         
         args.images = self.images
+        args.depths = self.depths
         args.flows = self.flows
         args.raft_masks = self.raft_masks
         args.sample_weights = self.sample_weights

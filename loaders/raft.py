@@ -27,6 +27,10 @@ class RAFTExhaustiveDataset(Dataset):
         if hasattr(args, 'images') and args.images is not None:
             self.images = args.images
             self.num_imgs = len(self.images)
+            if hasattr(args, 'depths') and args.depths is not None:
+                self.depths = args.depths
+            else:
+                self.depths = None
             self.h, self.w = self.images.shape[1:3]
             self.img_names = [f'{i:05d}.jpg' for i in range(self.num_imgs)]
             self.flows = args.flows if hasattr(args, 'flows') else None
@@ -45,6 +49,7 @@ class RAFTExhaustiveDataset(Dataset):
             flow_stats = json.load(open(os.path.join(self.seq_dir, 'flow_stats.json')))
             self.sample_weights = get_sample_weights(flow_stats)
             self.images = None
+            self.depths = None
 
         max_interval = self.num_imgs - 1 if not max_interval else max_interval
         self.max_interval = mp.Value('i', max_interval)
@@ -82,6 +87,11 @@ class RAFTExhaustiveDataset(Dataset):
             img2 = self.images[id2].numpy()
             flow = self.flows[f'{img_name1}_{img_name2}']
             masks = self.raft_masks[f'{img_name1}_{img_name2}']
+
+            if self.depths is not None:
+                depth1 = self.depths[id1].numpy()
+            else:
+                depth1 = None
         else:
             cached_flow_pred_dir = os.path.join('out', '{}_{}'.format(self.args.expname, self.seq_name), 'flow')
             cached_flow_pred_files = sorted(glob.glob(os.path.join(cached_flow_pred_dir, '*')))
@@ -117,6 +127,8 @@ class RAFTExhaustiveDataset(Dataset):
             flow = np.load(flow_file)
             mask_file = flow_file.replace('raft_exhaustive', 'raft_masks').replace('.npy', '.png')
             masks = imageio.imread(mask_file) / 255.
+
+            depth1 = None
 
         coord1 = self.grid
         coord2 = self.grid + flow
@@ -172,6 +184,7 @@ class RAFTExhaustiveDataset(Dataset):
         gt_rgb1 = torch.from_numpy(img1[mask][select_ids]).float()
         gt_rgb2 = F.grid_sample(torch.from_numpy(img2).float().permute(2, 0, 1)[None], pts2_normed,
                                 align_corners=True).squeeze().T
+        gt_depth1 = torch.from_numpy(depth1[mask][select_ids]).float()
 
         if invalid:
             weights = torch.zeros_like(weights)
@@ -185,6 +198,7 @@ class RAFTExhaustiveDataset(Dataset):
                 'pts1': pts1,  # [n_pts, 2]
                 'pts2': pts2,  # [n_pts, 2]
                 'gt_rgb1': gt_rgb1,  # [n_pts, 3]
+                'gt_depth1': gt_depth1,
                 'gt_rgb2': gt_rgb2,
                 'weights': weights,  # [n_pts, 1]
                 'covisible_mask': covisible_mask,  # [n_pts, 1]
