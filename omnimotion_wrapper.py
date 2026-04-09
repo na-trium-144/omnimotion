@@ -47,6 +47,7 @@ class OmniMotionOptimizer:
         std_t = torch.tensor(std).view(1, 3, 1, 1)
         images_01 = (video_tensor.cpu() * std_t + mean_t).clamp(0, 1)
         self.images = images_01.permute(0, 2, 3, 1) # [N, H, W, 3]
+        self.images_gpu = self.images.to(device)
         self.num_imgs, self.h, self.w, _ = self.images.shape
         
         self.flows = {}
@@ -183,8 +184,8 @@ class OmniMotionOptimizer:
             for i in tqdm(range(self.num_imgs), desc="Exhaustive RAFT"):
                 for j in range(self.num_imgs):
                     if i == j: continue
-                    image1 = self.images[i].permute(2, 0, 1)[None] * 255
-                    image2 = self.images[j].permute(2, 0, 1)[None] * 255
+                    image1 = self.images_gpu[i].permute(2, 0, 1)[None] * 255
+                    image2 = self.images_gpu[j].permute(2, 0, 1)[None] * 255
                     padder = InputPadder(image1.shape)
                     img1, img2 = padder.pad(image1, image2)
                     _, flow_up = model(img1, img2, iters=20, test_mode=True)
@@ -209,7 +210,7 @@ class OmniMotionOptimizer:
         model.eval()
 
         for i in tqdm(range(self.num_imgs), desc="DINO Features"):
-            frame = self.images[i].permute(2, 0, 1)[None] # [1, 3, H, W]
+            frame = self.images_gpu[i].permute(2, 0, 1)[None] # [1, 3, H, W]
             # Normalize for DINO
             norm_frame = F.interpolate(frame, size=((self.h // 16) * 16, (self.w // 16) * 16), mode='bilinear')
             mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(self.device)
@@ -294,8 +295,8 @@ class OmniMotionOptimizer:
                     coords_normed = normalize_coords(grid + accum_flow, self.h, self.w)
                     feat_j_samp = F.grid_sample(self.features[j].permute(2, 0, 1)[None], coords_normed, align_corners=True)
                     feat_sim = torch.cosine_similarity(feat_i, feat_j_samp, dim=1).squeeze(0).cpu().numpy()
-                    img_j_samp = F.grid_sample(self.images[j].permute(2, 0, 1)[None], coords_normed, align_corners=True).squeeze()
-                    rgb_sim = torch.norm(self.images[i].permute(2, 0, 1) - img_j_samp, dim=0).cpu().numpy()
+                    img_j_samp = F.grid_sample(self.images_gpu[j].permute(2, 0, 1)[None], coords_normed, align_corners=True).squeeze()
+                    rgb_sim = torch.norm(self.images_gpu[i].permute(2, 0, 1) - img_j_samp, dim=0).cpu().numpy()
 
                     accum_mask = accum_mask * (feat_sim > 0.5) * (rgb_sim < 0.3)
                     accum_mask[direct_cycle] = True
@@ -340,13 +341,15 @@ class OmniMotionOptimizer:
         if self.trainer is None: self.trainer = BaseTrainer(self.args, device=self.device)
         if isinstance(points, np.ndarray): points = torch.from_numpy(points).float().to(self.device)
         trajs = []
+        depths = []
         with torch.no_grad():
             for tid in range(self.num_imgs):
-                if tid == query_frame_id: trajs.append(points)
-                else:
-                    p2 = self.trainer.get_correspondences_for_pixels(ids1=[query_frame_id], px1s=points[None], ids2=[tid], use_max_loc=True)
-                    trajs.append(p2[0])
-        return torch.stack(trajs, dim=0)
+                # if tid == query_frame_id: trajs.append(points)
+                # else:
+                p2, d2 = self.trainer.get_correspondences_for_pixels(ids1=[query_frame_id], px1s=points[None], ids2=[tid], use_max_loc=True, return_depth=True)
+                trajs.append(p2[0])
+                depths.append(d2[0])
+        return torch.stack(trajs, dim=0), torch.stack(depths, dim=0)
 
     def save_checkpoint(self, path: str): self.trainer.save_model(path)
     def load_checkpoint(self, path: str):
