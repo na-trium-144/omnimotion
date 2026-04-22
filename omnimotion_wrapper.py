@@ -47,11 +47,11 @@ class OmniMotionOptimizer:
         mean_t = torch.tensor(mean).view(1, 3, 1, 1)
         std_t = torch.tensor(std).view(1, 3, 1, 1)
         images_01 = (video_tensor.cpu() * std_t + mean_t).clamp(0, 1)
-        self.images = images_01.permute(0, 2, 3, 1) # [N, H, W, 3]
+        self.images = images_01.permute(0, 2, 3, 1).contiguous() # [N, H, W, 3]
         self.images_gpu = self.images.to(device)
         self.num_imgs, self.h, self.w, _ = self.images.shape
 
-        self.depths = depths_tensor.clone().cpu().permute(0, 2, 3, 1) # [N, H, W, 1]
+        self.depths = depths_tensor.clone().cpu().permute(0, 2, 3, 1).contiguous() # [N, H, W, 1]
         self.depths /= torch.max(self.depths) * 2 - 1
         self.depths_gpu = self.depths.to(device)
         assert self.depths.shape[0] == self.num_imgs and self.depths.shape[1:3] == self.images.shape[1:3], f"Depth tensor shape must match video tensor shape, but got {self.depths.shape} and {self.images.shape}"
