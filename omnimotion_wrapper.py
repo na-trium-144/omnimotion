@@ -344,19 +344,28 @@ class OmniMotionOptimizer:
         writer.flush()
         writer.close()
 
-    def query_trajectory(self, query_frame_id: int, points: Union[torch.Tensor, np.ndarray]):
+    def query_trajectory(self, query_frame_id: int, points: Union[torch.Tensor, np.ndarray], target_frames: List[int] = None, chunk_size: int = None):
         if self.trainer is None: self.trainer = BaseTrainer(self.args, device=self.device)
         if isinstance(points, np.ndarray): points = torch.from_numpy(points).float().to(self.device)
-        trajs = []
-        depths = []
+        if chunk_size is None:
+            chunk_size = self.args.chunk_size
+
+        if target_frames is None:
+            target_frames = list(range(self.num_imgs))
+
+        all_trajs = []
+        all_depths = []
         with torch.no_grad():
-            for tid in range(self.num_imgs):
-                # if tid == query_frame_id: trajs.append(points)
-                # else:
-                p2, d2 = self.trainer.get_correspondences_for_pixels(ids1=[query_frame_id], px1s=points[None], ids2=[tid], use_max_loc=True, return_depth=True)
-                trajs.append(p2[0])
-                depths.append(d2[0])
-        return torch.stack(trajs, dim=0), torch.stack(depths, dim=0)
+            for tid in target_frames:
+                trajs_tid = []
+                depths_tid = []
+                for chunk_pts in torch.split(points, chunk_size, dim=0):
+                    p2, d2 = self.trainer.get_correspondences_for_pixels(ids1=[query_frame_id], px1s=chunk_pts[None], ids2=[tid], use_max_loc=True, return_depth=True)
+                    trajs_tid.append(p2[0])
+                    depths_tid.append(d2[0])
+                all_trajs.append(torch.cat(trajs_tid, dim=0))
+                all_depths.append(torch.cat(depths_tid, dim=0))
+        return torch.stack(all_trajs, dim=0), torch.stack(all_depths, dim=0)
 
     def save_checkpoint(self, path: str): self.trainer.save_model(path)
     def load_checkpoint(self, path: str):
